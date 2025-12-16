@@ -1,0 +1,538 @@
+# PostgreSQL 자동 설치 스크립트
+
+RHEL 9 / Rocky Linux 9 기반 PostgreSQL 설치 및 관리를 위한 Makefile 기반 자동화 도구입니다.
+
+## 빠른 시작
+
+### 1. 환경 설정
+
+```bash
+# .env 파일 생성
+cp .env.example .env
+
+# 필요시 .env 파일 수정
+vi .env
+```
+
+### 2. 전체 설치 (원스텝)
+
+```bash
+# 커널 튜닝 + 설치 + 초기화 + 시작 + 외부 접속 설정
+make all
+```
+
+**주의:** `make all`은 시스템 커널 튜닝을 먼저 수행합니다. 일부 설정은 재부팅 후 완전히 적용됩니다.
+
+## 단계별 설치
+
+### 0단계: 시스템 커널 튜닝 (권장)
+
+PostgreSQL 최적 성능을 위한 커널 파라미터 및 리소스 제한 설정입니다.
+
+```bash
+# 모든 시스템 튜닝 적용
+make tune-all
+
+# 또는 개별 실행
+make tune-kernel      # 커널 파라미터 설정
+make tune-limits      # 리소스 제한 설정
+make tune-hugepages   # Huge Pages 설정 (ENABLE_HUGE_PAGES=true 시)
+```
+
+**적용되는 설정:**
+- 메모리 관리: swappiness, dirty page 설정
+- 네트워크: 연결 대기 큐, keepalive 설정
+- 공유 메모리: shmmax, shmall
+- 리소스 제한: 파일 디스크립터, 프로세스 수, 메모리 잠금
+- Huge Pages: 대용량 메모리 최적화 (선택사항)
+
+**설정 확인:**
+```bash
+make show-tuning
+```
+
+## 단계별 설치 (PostgreSQL)
+
+### 1단계: PostgreSQL 설치
+
+```bash
+make install
+```
+
+**수행 작업:**
+- PGDG 공식 저장소 추가
+- 기본 PostgreSQL 모듈 비활성화
+- PostgreSQL 16 서버 패키지 설치
+
+### 2단계: 데이터베이스 초기화
+
+```bash
+make init
+```
+
+**수행 작업:**
+- initdb 실행
+- 데이터 디렉토리 생성 (`/var/lib/pgsql/16/data`)
+
+### 3단계: 서비스 시작 및 활성화
+
+```bash
+# 자동 시작 활성화 + 서비스 시작
+make enable-start
+
+# 또는 개별 실행
+make enable  # 부팅 시 자동 시작
+make start   # 서비스 시작
+```
+
+### 4단계: 외부 접속 설정 (선택사항)
+
+```bash
+# 외부 접속 허용 설정 (listen_addresses, pg_hba.conf, 방화벽)
+make setup-external
+```
+
+## 주요 명령어
+
+### 시스템 튜닝
+
+```bash
+make tune-all           # 모든 시스템 튜닝 적용
+make tune-kernel        # 커널 파라미터 설정
+make tune-limits        # 리소스 제한 설정
+make tune-hugepages     # Huge Pages 설정
+make show-tuning        # 현재 튜닝 값 확인
+```
+
+### 서비스 관리
+
+```bash
+make start          # 서비스 시작
+make stop           # 서비스 중지
+make restart        # 서비스 재시작
+make status         # 서비스 상태 확인
+make enable         # 부팅 시 자동 시작 활성화
+make disable        # 부팅 시 자동 시작 비활성화
+```
+
+### 설정 관리
+
+```bash
+make configure-listen    # listen_addresses 설정
+make configure-auth      # pg_hba.conf 인증 설정
+make firewall           # 방화벽 포트 열기
+make setup-external     # 외부 접속 전체 설정
+```
+
+### 테스트 및 검증
+
+```bash
+make test               # 전체 테스트 (연결 + 데이터베이스)
+make test-connection    # PostgreSQL 연결 테스트
+make test-database      # 데이터베이스 CRUD 테스트
+make test-performance   # 성능 테스트 (pgbench)
+```
+
+### 오프라인 패키징
+
+```bash
+# 인터넷 연결된 서버에서
+make offline-download    # PostgreSQL RPM 다운로드
+make offline-createrepo  # Repository 메타데이터 생성
+make offline-package     # 오프라인 패키지 생성 및 압축
+
+# 인터넷 없는 서버에서
+make offline-setup-repo  # Repository 설정
+make offline-install     # 오프라인 설치
+```
+
+### ISO Repository
+
+```bash
+make iso-mount ISO_FILE=/path/to/rhel.iso  # ISO 마운트
+make iso-setup-repo     # ISO Repository 설정
+make iso-unmount        # ISO 마운트 해제
+make iso-all ISO_FILE=/path/to/rhel.iso   # ISO 전체 설정
+```
+
+### 유틸리티
+
+```bash
+make help           # 도움말 표시
+make check-env      # 환경 변수 확인
+make version        # PostgreSQL 버전 확인
+make logs           # 실시간 로그 확인
+```
+
+### 제거
+
+```bash
+make clean          # 데이터 디렉토리 삭제 (데이터 삭제)
+make uninstall      # PostgreSQL 패키지 제거
+```
+
+## 📖 상세 명령어 레퍼런스
+
+모든 명령어의 상세한 사용법은 [COMMANDS.md](COMMANDS.md)를 참조하세요.
+
+## 환경 변수 (.env)
+
+### 시스템 튜닝 변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `VM_SWAPPINESS` | 10 | 스왑 사용 억제 (0-100) |
+| `VM_DIRTY_BACKGROUND_RATIO` | 5 | 백그라운드 dirty page 비율 |
+| `VM_DIRTY_RATIO` | 15 | dirty page 최대 비율 |
+| `NET_CORE_SOMAXCONN` | 4096 | 연결 대기 큐 크기 |
+| `NET_IPV4_TCP_KEEPALIVE_TIME` | 600 | TCP keepalive 시간(초) |
+| `KERNEL_SHMMAX` | 17179869184 | 공유 메모리 최대 크기(바이트) |
+| `KERNEL_SHMALL` | 4194304 | 공유 메모리 페이지 수 |
+| `ULIMIT_NOFILE` | 65536 | 파일 디스크립터 제한 |
+| `ULIMIT_NPROC` | unlimited | 프로세스 수 제한 |
+| `ENABLE_HUGE_PAGES` | false | Huge Pages 활성화 여부 |
+| `HUGE_PAGES_COUNT` | (자동) | Huge Pages 수 (비워두면 자동 계산) |
+| `PG_SHARED_BUFFERS` | 4GB | shared_buffers 크기 (Huge Pages 계산용) |
+
+### PostgreSQL 변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `PG_VERSION` | 16 | PostgreSQL 버전 |
+| `PG_PORT` | 5432 | PostgreSQL 포트 |
+| `PG_LISTEN_ADDRESSES` | * | 수신 IP 주소 (* = 모든 IP) |
+| `PG_ALLOWED_CIDR` | 0.0.0.0/0 | 접속 허용 IP 대역 |
+| `PG_AUTH_METHOD` | scram-sha-256 | 인증 방식 |
+| `ENABLE_FIREWALL` | true | 방화벽 설정 활성화 여부 |
+| `EL_VERSION` | 9 | RHEL/Rocky Linux 버전 |
+
+## PostgreSQL 접속
+
+### 로컬 접속
+
+```bash
+# postgres 사용자로 전환
+sudo -u postgres psql
+
+# 또는
+sudo su - postgres
+psql
+```
+
+### 원격 접속
+
+```bash
+# 클라이언트에서
+psql -h <서버IP> -U postgres -d postgres
+```
+
+## 설치 경로
+
+- **데이터 디렉토리**: `/var/lib/pgsql/16/data/`
+- **바이너리 경로**: `/usr/pgsql-16/bin/`
+- **설정 파일**:
+  - `/var/lib/pgsql/16/data/postgresql.conf`
+  - `/var/lib/pgsql/16/data/pg_hba.conf`
+- **서비스 이름**: `postgresql-16`
+
+## 보안 권장 사항
+
+1. **postgres 사용자 비밀번호 설정**
+   ```bash
+   sudo passwd postgres
+   ```
+
+2. **PostgreSQL 관리자 비밀번호 설정**
+   ```bash
+   sudo -u postgres psql
+   postgres=# ALTER USER postgres PASSWORD 'your_password';
+   ```
+
+3. **IP 접속 제한**
+   - `.env` 파일에서 `PG_ALLOWED_CIDR`을 특정 IP 대역으로 제한
+   - 예: `PG_ALLOWED_CIDR=192.168.1.0/24`
+
+4. **방화벽 설정 확인**
+   ```bash
+   sudo firewall-cmd --list-all
+   ```
+
+## 성능 튜닝 가이드
+
+### Huge Pages 활성화 (고성능 환경 권장)
+
+대용량 메모리(64GB 이상) 환경에서 권장됩니다.
+
+1. `.env` 파일 수정
+   ```bash
+   ENABLE_HUGE_PAGES=true
+   PG_SHARED_BUFFERS=8GB  # PostgreSQL의 shared_buffers 설정값
+   ```
+
+2. 튜닝 적용
+   ```bash
+   make tune-hugepages
+   ```
+
+3. PostgreSQL 설정 (`/var/lib/pgsql/16/data/postgresql.conf`)
+   ```ini
+   shared_buffers = 8GB
+   huge_pages = try
+   ```
+
+4. 서비스 재시작
+   ```bash
+   make restart
+   ```
+
+5. Huge Pages 사용 확인
+   ```bash
+   make show-tuning
+   # 또는
+   grep HugePages /proc/meminfo
+   ```
+
+### 커널 튜닝 값 조정
+
+환경에 맞게 `.env` 파일의 값을 조정한 후 재적용:
+
+```bash
+vi .env
+make tune-kernel
+make restart
+```
+
+### 리소스 제한 확인
+
+```bash
+# postgres 사용자로 전환 후
+sudo su - postgres
+ulimit -a
+
+# 특정 값 확인
+ulimit -n  # 파일 디스크립터
+ulimit -u  # 프로세스 수
+```
+
+## 오프라인 설치 가이드
+
+### 준비 단계 (인터넷 연결된 서버에서)
+
+1. **오프라인 패키지 생성**
+   ```bash
+   # PostgreSQL 및 의존성 RPM 다운로드 + Repository 생성 + 압축
+   make offline-package
+   ```
+
+2. **생성된 파일 확인**
+   ```bash
+   ls -lh /root/postgresql16-offline-el9.tar.gz
+   ```
+
+3. **오프라인 서버로 전송**
+   - USB, SCP, 또는 다른 방법으로 전송
+
+### 설치 단계 (인터넷 없는 서버에서)
+
+1. **압축 해제**
+   ```bash
+   tar -xzf postgresql16-offline-el9.tar.gz
+   cd postgresql-offline-repo
+   ```
+
+2. **프로젝트 파일 준비**
+   ```bash
+   # Makefile, .env, scripts 디렉토리를 함께 복사해야 함
+   # 또는 프로젝트 디렉토리에서 실행
+   ```
+
+3. **Repository 설정**
+   ```bash
+   make offline-setup-repo
+   ```
+
+4. **PostgreSQL 설치**
+   ```bash
+   make install init enable-start setup-external
+   ```
+
+5. **설치 확인**
+   ```bash
+   make test
+   ```
+
+## ISO Repository 사용 가이드
+
+### RHEL/Rocky Linux ISO를 사용한 로컬 Repository 설정
+
+1. **ISO 파일 확인**
+   ```bash
+   ls -lh /root/rhel-9.6-x86_64-dvd.iso
+   ```
+
+2. **ISO 마운트 및 Repository 설정**
+   ```bash
+   make iso-mount ISO_FILE=/root/rhel-9.6-x86_64-dvd.iso
+   make iso-setup-repo
+   ```
+
+   또는 한 번에:
+   ```bash
+   make iso-all ISO_FILE=/root/rhel-9.6-x86_64-dvd.iso
+   ```
+
+3. **Repository 확인**
+   ```bash
+   dnf repolist
+   ```
+
+4. **필요한 도구 설치**
+   ```bash
+   dnf install -y make createrepo_c
+   ```
+
+5. **PostgreSQL 설치**
+   ```bash
+   # PGDG 저장소에서 PostgreSQL 다운로드
+   make offline-download
+
+   # 또는 직접 설치 (인터넷 필요)
+   make install init enable-start setup-external
+   ```
+
+6. **ISO 마운트 영구화 (선택사항)**
+
+   `/etc/fstab`에 추가:
+   ```bash
+   echo "/root/rhel-9.6-x86_64-dvd.iso /mnt/rhel-iso iso9660 loop 0 0" | sudo tee -a /etc/fstab
+   ```
+
+## 테스트 가이드
+
+### 기본 테스트
+
+```bash
+# 연결 테스트
+make test-connection
+
+# 데이터베이스 CRUD 테스트
+make test-database
+
+# 전체 테스트
+make test
+```
+
+### 성능 테스트
+
+```bash
+# pgbench를 사용한 성능 테스트
+make test-performance
+```
+
+**출력 예시:**
+```
+tps = 1234.567890 (including connections establishing)
+tps = 1234.567890 (excluding connections establishing)
+```
+
+### 수동 테스트
+
+```bash
+# PostgreSQL 접속
+sudo -u postgres psql
+
+# 버전 확인
+SELECT version();
+
+# 데이터베이스 목록
+\l
+
+# 연결 정보
+\conninfo
+
+# 종료
+\q
+```
+
+## 트러블슈팅
+
+### 커널 튜닝 설정이 적용되지 않을 때
+
+1. 설정 파일 확인
+   ```bash
+   cat /etc/sysctl.d/99-postgresql.conf
+   cat /etc/security/limits.d/postgresql.conf
+   ```
+
+2. 수동 적용
+   ```bash
+   sudo sysctl --system
+   ```
+
+3. 재부팅
+   ```bash
+   sudo reboot
+   ```
+
+4. 적용 확인
+   ```bash
+   make show-tuning
+   ```
+
+### 서비스가 시작되지 않을 때
+
+```bash
+# 로그 확인
+make logs
+
+# 또는
+sudo journalctl -u postgresql-16 -n 50
+```
+
+### 데이터 디렉토리 재생성
+
+```bash
+# 데이터 삭제 및 재초기화
+make clean
+make init
+```
+
+### 외부 접속이 안 될 때
+
+1. 방화벽 확인
+   ```bash
+   sudo firewall-cmd --list-all
+   ```
+
+2. PostgreSQL 설정 확인
+   ```bash
+   sudo grep listen_addresses /var/lib/pgsql/16/data/postgresql.conf
+   sudo cat /var/lib/pgsql/16/data/pg_hba.conf
+   ```
+
+3. 서비스 재시작
+   ```bash
+   make restart
+   ```
+
+## 버전 변경
+
+PostgreSQL 17로 변경하려면:
+
+```bash
+# .env 파일 수정
+vi .env
+# PG_VERSION=17로 변경
+
+# 설치
+make all
+```
+
+## 라이선스
+
+MIT License
+
+## 참고 자료
+
+- [PostgreSQL 공식 문서](https://www.postgresql.org/docs/)
+- [PGDG Yum Repository](https://yum.postgresql.org/)
