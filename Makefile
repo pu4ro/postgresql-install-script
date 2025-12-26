@@ -10,7 +10,9 @@
         apache-offline-download apache-offline-package \
         tomcat-install tomcat-configure tomcat-firewall tomcat-start tomcat-stop tomcat-restart \
         tomcat-status tomcat-enable tomcat-disable tomcat-test tomcat-all tomcat-uninstall tomcat-logs \
-        tomcat-offline-download tomcat-offline-package \
+        tomcat-offline-download tomcat-offline-createrepo tomcat-offline-package \
+        tomcat-offline-package-all tomcat-offline-setup-repo tomcat-offline-install-pkg \
+        tomcat-offline-install tomcat-offline-full-install \
         web-all web-test web-offline-package stack-all stack-test
 
 # 환경 변수 로드
@@ -1093,12 +1095,18 @@ tomcat-logs: ## Tomcat 로그 확인
 # Tomcat 오프라인 패키징
 # ===================================================================
 
-tomcat-offline-download: ## Tomcat RPM 패키지 다운로드
+# Tomcat 오프라인 패키지 파일명
+TOMCAT_OFFLINE_ARCHIVE_NAME ?= tomcat-offline-el$(EL_VERSION).tar.gz
+
+tomcat-offline-download: ## Tomcat RPM 패키지 다운로드 (ISO repo 필요)
 	@echo "$(BLUE)Tomcat 오프라인 패키지 다운로드...$(NC)"
 
 	@mkdir -p $(OFFLINE_REPO_DIR)/tomcat-rpms
 
-	@echo "$(YELLOW)Tomcat 및 Java 패키지 다운로드$(NC)"
+	@echo "$(YELLOW)1. createrepo 도구 다운로드$(NC)"
+	@cd $(OFFLINE_REPO_DIR)/tomcat-rpms && dnf download --resolve createrepo_c 2>/dev/null || true
+
+	@echo "$(YELLOW)2. Tomcat 및 Java 패키지 다운로드$(NC)"
 	@cd $(OFFLINE_REPO_DIR)/tomcat-rpms && dnf download --resolve --alldeps \
 		java-11-openjdk java-11-openjdk-devel \
 		tomcat tomcat-webapps tomcat-admin-webapps
@@ -1106,14 +1114,217 @@ tomcat-offline-download: ## Tomcat RPM 패키지 다운로드
 	@echo "$(GREEN)✓ Tomcat 패키지 다운로드 완료$(NC)"
 	@ls $(OFFLINE_REPO_DIR)/tomcat-rpms/*.rpm 2>/dev/null | wc -l | xargs echo "  총 RPM 파일 수:"
 
-tomcat-offline-package: tomcat-offline-download ## Tomcat 오프라인 패키지 생성
-	@echo "$(BLUE)Tomcat 오프라인 패키지 생성...$(NC)"
+tomcat-offline-createrepo: ## Tomcat repository 메타데이터 생성
+	@echo "$(BLUE)Tomcat Repository 메타데이터 생성...$(NC)"
+
+	@if ! command -v createrepo_c &> /dev/null; then \
+		echo "$(YELLOW)createrepo_c 설치 중...$(NC)"; \
+		sudo dnf install -y createrepo_c; \
+	fi
 
 	@createrepo_c $(OFFLINE_REPO_DIR)/tomcat-rpms/
-	@cd $(dir $(OFFLINE_REPO_DIR)) && tar -czf tomcat-offline-el$(EL_VERSION).tar.gz $(notdir $(OFFLINE_REPO_DIR))/tomcat-rpms
+
+	@echo "$(GREEN)✓ Tomcat Repository 메타데이터 생성 완료$(NC)"
+
+tomcat-offline-package: tomcat-offline-download tomcat-offline-createrepo ## Tomcat 오프라인 패키지 생성
+	@echo "$(BLUE)Tomcat 오프라인 패키지 압축...$(NC)"
+
+	@echo "$(YELLOW)1. 설치 스크립트 복사$(NC)"
+	@cp -f scripts/offline-setup-repo.sh $(OFFLINE_REPO_DIR)/ 2>/dev/null || true
+	@chmod +x $(OFFLINE_REPO_DIR)/offline-setup-repo.sh 2>/dev/null || true
+
+	@echo "$(YELLOW)2. README 파일 생성$(NC)"
+	@echo "Tomcat $(TOMCAT_MAJOR_VERSION) 오프라인 설치 패키지" > $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "========================================" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "## 오프라인 서버 설치 방법" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "1. 압축 해제:" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "   tar -xzf $(TOMCAT_OFFLINE_ARCHIVE_NAME)" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "2. 전체 설치 (권장):" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "   make tomcat-offline-full-install" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+
+	@echo "$(YELLOW)3. 압축 파일 생성$(NC)"
+	@cd $(dir $(OFFLINE_REPO_DIR)) && tar -czf $(TOMCAT_OFFLINE_ARCHIVE_NAME) $(notdir $(OFFLINE_REPO_DIR))/tomcat-rpms
 
 	@echo "$(GREEN)✓ Tomcat 오프라인 패키지 생성 완료$(NC)"
-	@ls -lh $(dir $(OFFLINE_REPO_DIR))tomcat-offline-el$(EL_VERSION).tar.gz 2>/dev/null || true
+	@ls -lh $(dir $(OFFLINE_REPO_DIR))$(TOMCAT_OFFLINE_ARCHIVE_NAME) 2>/dev/null || true
+
+# ===================================================================
+# Tomcat 오프라인 패키지 생성 전체 플로우 (온라인 서버용)
+# ===================================================================
+
+tomcat-offline-package-all: check-env ## [온라인] ISO 기반 Tomcat 오프라인 패키지 생성
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(BLUE)Tomcat 오프라인 패키지 생성 시작 (ISO 기반)$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+
+	@if [ -z "$(ISO_FILE)" ]; then \
+		echo "$(RED)오류: .env 파일에 ISO_FILE이 설정되지 않았습니다.$(NC)"; \
+		echo "$(YELLOW).env 파일을 편집하여 ISO_FILE 경로를 설정하세요.$(NC)"; \
+		exit 1; \
+	fi
+
+	@echo "$(YELLOW)1단계: ISO 마운트 및 로컬 Repository 설정$(NC)"
+	$(MAKE) iso-mount
+	$(MAKE) iso-setup-repo
+
+	@echo ""
+	@echo "$(YELLOW)2단계: Tomcat 및 Java 패키지 다운로드$(NC)"
+	$(MAKE) tomcat-offline-download
+
+	@echo ""
+	@echo "$(YELLOW)3단계: Repository 메타데이터 생성$(NC)"
+	$(MAKE) tomcat-offline-createrepo
+
+	@echo ""
+	@echo "$(YELLOW)4단계: 오프라인 패키지 압축$(NC)"
+	@echo "$(YELLOW)4-1. 설치 스크립트 복사$(NC)"
+	@cp -f scripts/offline-setup-repo.sh $(OFFLINE_REPO_DIR)/ 2>/dev/null || true
+	@chmod +x $(OFFLINE_REPO_DIR)/offline-setup-repo.sh 2>/dev/null || true
+
+	@echo "$(YELLOW)4-2. README 파일 생성$(NC)"
+	@echo "Tomcat $(TOMCAT_MAJOR_VERSION) 오프라인 설치 패키지" > $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "========================================" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "## 오프라인 서버 설치 방법" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "1. 패키지 파일과 ISO 파일을 오프라인 서버로 복사" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "2. 압축 해제:" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "   tar -xzf $(TOMCAT_OFFLINE_ARCHIVE_NAME)" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "3. .env 파일에서 ISO_FILE 경로 설정" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "4. 전체 설치 (권장):" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+	@echo "   make tomcat-offline-full-install" >> $(OFFLINE_REPO_DIR)/tomcat-rpms/README.txt
+
+	@echo "$(YELLOW)4-3. 압축 파일 생성$(NC)"
+	@cd $(dir $(OFFLINE_REPO_DIR)) && tar -czf $(TOMCAT_OFFLINE_ARCHIVE_NAME) $(notdir $(OFFLINE_REPO_DIR))/tomcat-rpms
+
+	@echo ""
+	@echo "$(YELLOW)5단계: ISO 마운트 해제$(NC)"
+	$(MAKE) iso-unmount
+
+	@echo ""
+	@echo "$(GREEN)========================================$(NC)"
+	@echo "$(GREEN)Tomcat 오프라인 패키지 생성 완료!$(NC)"
+	@echo "$(GREEN)========================================$(NC)"
+	@echo ""
+	@echo "$(BLUE)생성된 파일:$(NC)"
+	@ls -lh $(dir $(OFFLINE_REPO_DIR))$(TOMCAT_OFFLINE_ARCHIVE_NAME) 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)오프라인 서버에서 설치 방법:$(NC)"
+	@echo "  1. 패키지, ISO 파일, 프로젝트 디렉토리를 오프라인 서버로 복사"
+	@echo "  2. 압축 해제: tar -xzf $(TOMCAT_OFFLINE_ARCHIVE_NAME) -C /root/"
+	@echo "  3. .env 파일에서 ISO_FILE 경로 설정"
+	@echo "  4. 설치 실행: make tomcat-offline-full-install"
+
+# ===================================================================
+# Tomcat 오프라인 설치 (오프라인 서버용)
+# ===================================================================
+
+tomcat-offline-setup-repo: ## Tomcat 오프라인 Repository 설정
+	@echo "$(BLUE)Tomcat 오프라인 Repository 설정...$(NC)"
+
+	@if [ ! -d "$(OFFLINE_REPO_DIR)/tomcat-rpms" ]; then \
+		echo "$(RED)오류: $(OFFLINE_REPO_DIR)/tomcat-rpms 디렉토리가 없습니다.$(NC)"; \
+		echo "$(YELLOW)먼저 Tomcat 오프라인 패키지를 압축 해제하세요.$(NC)"; \
+		exit 1; \
+	fi
+
+	@echo "$(YELLOW)1. createrepo_c 설치$(NC)"
+	@cd $(OFFLINE_REPO_DIR)/tomcat-rpms && sudo rpm -ivh createrepo_c-*.rpm --force --nodeps 2>/dev/null || true
+
+	@echo "$(YELLOW)2. Local repository 설정 파일 생성$(NC)"
+	@echo "[tomcat-local]" | sudo tee /etc/yum.repos.d/tomcat-local.repo
+	@echo "name=Tomcat Local Repository" | sudo tee -a /etc/yum.repos.d/tomcat-local.repo
+	@echo "baseurl=file://$(OFFLINE_REPO_DIR)/tomcat-rpms" | sudo tee -a /etc/yum.repos.d/tomcat-local.repo
+	@echo "enabled=1" | sudo tee -a /etc/yum.repos.d/tomcat-local.repo
+	@echo "gpgcheck=0" | sudo tee -a /etc/yum.repos.d/tomcat-local.repo
+
+	@echo "$(YELLOW)3. Repository 캐시 업데이트$(NC)"
+	@sudo dnf clean all
+	@sudo dnf makecache
+
+	@echo "$(GREEN)✓ Tomcat 오프라인 Repository 설정 완료$(NC)"
+
+tomcat-offline-install-pkg: ## Tomcat 오프라인 설치 (저장소 접근 없음)
+	@echo "$(BLUE)Tomcat 오프라인 설치...$(NC)"
+
+	@echo "$(YELLOW)1. Java 설치$(NC)"
+	sudo dnf install -y --disablerepo='*' --enablerepo='tomcat-local,LocalRepo-BaseOS,LocalRepo-AppStream' \
+		java-11-openjdk java-11-openjdk-devel
+
+	@echo "$(YELLOW)2. Tomcat 패키지 설치$(NC)"
+	sudo dnf install -y --disablerepo='*' --enablerepo='tomcat-local,LocalRepo-BaseOS,LocalRepo-AppStream' \
+		tomcat tomcat-webapps tomcat-admin-webapps
+
+	@echo "$(YELLOW)3. Java 환경 변수 설정$(NC)"
+	@echo "JAVA_HOME=$(JAVA_HOME)" | sudo tee /etc/profile.d/java.sh > /dev/null
+	@source /etc/profile.d/java.sh 2>/dev/null || true
+
+	@echo "$(GREEN)✓ Tomcat 오프라인 설치 완료$(NC)"
+
+tomcat-offline-install: tomcat-offline-setup-repo tomcat-offline-install-pkg ## Tomcat 오프라인 패키지를 사용하여 설치
+	@echo "$(GREEN)✓ Tomcat 오프라인 설치 완료$(NC)"
+	@echo ""
+	@echo "$(BLUE)다음 단계:$(NC)"
+	@echo "  $(YELLOW)make tomcat-configure tomcat-firewall tomcat-enable tomcat-start$(NC)"
+
+# ===================================================================
+# Tomcat ISO + 오프라인 패키지 통합 설치 (오프라인 서버용)
+# ===================================================================
+
+tomcat-offline-full-install: check-env ## ISO + Tomcat 오프라인 패키지로 전체 설치
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(BLUE)Tomcat 오프라인 전체 설치 시작$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+
+	@if [ -z "$(ISO_FILE)" ]; then \
+		echo "$(RED)오류: .env 파일에 ISO_FILE이 설정되지 않았습니다.$(NC)"; \
+		echo "$(YELLOW).env 파일을 편집하여 ISO_FILE 경로를 설정하세요.$(NC)"; \
+		exit 1; \
+	fi
+
+	@echo "$(YELLOW)1단계: ISO 마운트 및 Repository 설정$(NC)"
+	$(MAKE) iso-mount
+	$(MAKE) iso-setup-repo
+
+	@echo ""
+	@echo "$(YELLOW)2단계: Tomcat 오프라인 Repository 설정$(NC)"
+	$(MAKE) tomcat-offline-setup-repo
+
+	@echo ""
+	@echo "$(YELLOW)3단계: Tomcat 설치$(NC)"
+	$(MAKE) tomcat-offline-install-pkg
+
+	@echo ""
+	@echo "$(YELLOW)4단계: Tomcat 설정$(NC)"
+	$(MAKE) tomcat-configure
+
+	@echo ""
+	@echo "$(YELLOW)5단계: 방화벽 설정$(NC)"
+	$(MAKE) tomcat-firewall
+
+	@echo ""
+	@echo "$(YELLOW)6단계: 서비스 활성화 및 시작$(NC)"
+	$(MAKE) tomcat-enable
+	$(MAKE) tomcat-start
+
+	@echo ""
+	@echo "$(GREEN)========================================$(NC)"
+	@echo "$(GREEN)Tomcat $(TOMCAT_MAJOR_VERSION) 오프라인 설치 완료!$(NC)"
+	@echo "$(GREEN)========================================$(NC)"
+	@echo ""
+	@echo "$(BLUE)설치된 서비스:$(NC)"
+	@echo "  Tomcat: http://localhost:$(TOMCAT_HTTP_PORT)"
+	@echo ""
+	@echo "$(YELLOW)다음 명령어로 테스트하세요:$(NC)"
+	@echo "  $(YELLOW)make tomcat-test$(NC)"
 
 # ===================================================================
 # 통합 웹 스택 설치
