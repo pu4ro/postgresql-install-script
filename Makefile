@@ -64,16 +64,16 @@ BLUE := \033[0;34m
 NC := \033[0m # No Color
 
 help: ## 사용 가능한 명령어 목록 표시
-	@echo "$(BLUE)PostgreSQL $(PG_VERSION) 설치 및 관리 도구$(NC)"
-	@echo ""
-	@echo "$(GREEN)사용 가능한 명령어:$(NC)"
+	@printf "$(BLUE)PostgreSQL $(PG_VERSION) 설치 및 관리 도구$(NC)\n"
+	@printf "\n"
+	@printf "$(GREEN)사용 가능한 명령어:$(NC)\n"
 	@grep -E '^[a-zA-Z_-]+:.* ## ' Makefile | sed 's/:.*## /\t/' | awk -F'\t' '{printf "  $(YELLOW)%-28s$(NC) %s\n", $$1, $$2}'
-	@echo ""
-	@echo "$(BLUE)현재 설정:$(NC)"
-	@echo "  PostgreSQL 버전: $(PG_VERSION)"
-	@echo "  데이터 디렉토리: $(PG_DATA_DIR)"
-	@echo "  서비스 이름: $(PG_SERVICE_NAME)"
-	@echo "  포트: $(PG_PORT)"
+	@printf "\n"
+	@printf "$(BLUE)현재 설정:$(NC)\n"
+	@printf "  PostgreSQL 버전: $(PG_VERSION)\n"
+	@printf "  데이터 디렉토리: $(PG_DATA_DIR)\n"
+	@printf "  서비스 이름: $(PG_SERVICE_NAME)\n"
+	@printf "  포트: $(PG_PORT)\n"
 
 check-env: ## 환경 변수 확인
 	@if [ ! -f .env ]; then \
