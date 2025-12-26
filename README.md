@@ -133,26 +133,25 @@ make test-database      # 데이터베이스 CRUD 테스트
 make test-performance   # 성능 테스트 (pgbench)
 ```
 
-### 오프라인 패키징
+### 오프라인 패키징 (ISO 기반)
 
 ```bash
-# 인터넷 연결된 서버에서
-make offline-download    # PostgreSQL RPM 다운로드
-make offline-createrepo  # Repository 메타데이터 생성
-make offline-package     # 오프라인 패키지 생성 및 압축
+# 온라인 서버에서 패키지 생성
+make offline-package-all          # PostgreSQL 오프라인 패키지 생성
+make tomcat-offline-package-all   # Tomcat 오프라인 패키지 생성
+make apache-offline-package       # Apache 오프라인 패키지 생성
 
-# 인터넷 없는 서버에서
-make offline-setup-repo  # Repository 설정
-make offline-install     # 오프라인 설치
+# 오프라인 서버에서 설치
+make offline-full-install         # PostgreSQL 전체 설치
+make tomcat-offline-full-install  # Tomcat 전체 설치
 ```
 
 ### ISO Repository
 
 ```bash
-make iso-mount ISO_FILE=/path/to/rhel.iso  # ISO 마운트
-make iso-setup-repo     # ISO Repository 설정
-make iso-unmount        # ISO 마운트 해제
-make iso-all ISO_FILE=/path/to/rhel.iso   # ISO 전체 설정
+make iso-mount           # ISO 마운트 (.env의 ISO_FILE 사용)
+make iso-setup-repo      # ISO Repository 설정
+make iso-unmount         # ISO 마운트 해제
 ```
 
 ### 유틸리티
@@ -314,98 +313,156 @@ ulimit -n  # 파일 디스크립터
 ulimit -u  # 프로세스 수
 ```
 
-## 오프라인 설치 가이드
+## 오프라인 설치 가이드 (ISO 기반)
 
-### 준비 단계 (인터넷 연결된 서버에서)
+오프라인 환경에서 PostgreSQL, Apache, Tomcat을 설치하기 위한 가이드입니다.
+RHEL/Rocky Linux ISO를 기반으로 종속성을 해결합니다.
 
-1. **오프라인 패키지 생성**
+### 전체 워크플로우 요약
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    온라인 서버 작업                              │
+├─────────────────────────────────────────────────────────────────┤
+│ 1. make init-env                    # .env 파일 생성            │
+│ 2. vi .env                          # ISO_FILE 경로 설정        │
+│ 3. make offline-package-all         # PostgreSQL 패키지 생성    │
+│ 4. make tomcat-offline-package-all  # Tomcat 패키지 생성        │
+│ 5. make apache-offline-package      # Apache 패키지 생성        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ 파일 전송 (USB, SCP 등)
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                   오프라인 서버 작업                             │
+├─────────────────────────────────────────────────────────────────┤
+│ 1. 프로젝트 디렉토리 복사                                        │
+│ 2. tar -xzf *.tar.gz -C /root/      # 패키지 압축 해제          │
+│ 3. vi .env                          # ISO_FILE 경로 설정        │
+│ 4. make offline-full-install        # PostgreSQL 설치           │
+│ 5. make tomcat-offline-full-install # Tomcat 설치               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 사전 준비
+
+1. **환경 설정 파일 생성**
    ```bash
-   # PostgreSQL 및 의존성 RPM 다운로드 + Repository 생성 + 압축
-   make offline-package
+   make init-env
    ```
 
-2. **생성된 파일 확인**
+2. **.env 파일 편집**
    ```bash
-   ls -lh /root/postgresql16-offline-el9.tar.gz
+   vi .env
+   # ISO_FILE=/path/to/rhel-9.6-x86_64-dvd.iso
    ```
 
-3. **오프라인 서버로 전송**
-   - USB, SCP, 또는 다른 방법으로 전송
+### 온라인 서버: 오프라인 패키지 생성
 
-### 설치 단계 (인터넷 없는 서버에서)
+#### PostgreSQL 오프라인 패키지 생성
 
-1. **압축 해제**
-   ```bash
-   tar -xzf postgresql16-offline-el9.tar.gz
-   cd postgresql-offline-repo
-   ```
+```bash
+# ISO 기반 전체 패키지 생성 (권장)
+make offline-package-all
 
-2. **프로젝트 파일 준비**
-   ```bash
-   # Makefile, .env, scripts 디렉토리를 함께 복사해야 함
-   # 또는 프로젝트 디렉토리에서 실행
-   ```
+# 생성되는 파일: postgresql16-offline-el9.tar.gz
+```
 
-3. **Repository 설정**
-   ```bash
-   make offline-setup-repo
-   ```
+#### Tomcat 오프라인 패키지 생성
 
-4. **PostgreSQL 설치**
-   ```bash
-   make install init enable-start setup-external
-   ```
+```bash
+# ISO 기반 전체 패키지 생성 (권장)
+make tomcat-offline-package-all
 
-5. **설치 확인**
-   ```bash
-   make test
-   ```
+# 생성되는 파일: tomcat-offline-el9.tar.gz
+```
 
-## ISO Repository 사용 가이드
+#### Apache 오프라인 패키지 생성
 
-### RHEL/Rocky Linux ISO를 사용한 로컬 Repository 설정
+```bash
+# Apache 패키지 생성
+make apache-offline-package
 
-1. **ISO 파일 확인**
-   ```bash
-   ls -lh /root/rhel-9.6-x86_64-dvd.iso
-   ```
+# 생성되는 파일: apache-offline-el9.tar.gz
+```
 
-2. **ISO 마운트 및 Repository 설정**
-   ```bash
-   make iso-mount ISO_FILE=/root/rhel-9.6-x86_64-dvd.iso
-   make iso-setup-repo
-   ```
+#### 전체 웹 스택 패키지 생성
 
-   또는 한 번에:
-   ```bash
-   make iso-all ISO_FILE=/root/rhel-9.6-x86_64-dvd.iso
-   ```
+```bash
+# Apache + Tomcat 함께 생성
+make web-offline-package
+```
 
-3. **Repository 확인**
-   ```bash
-   dnf repolist
-   ```
+### 오프라인 서버로 전송할 파일
 
-4. **필요한 도구 설치**
-   ```bash
-   dnf install -y make createrepo_c
-   ```
+1. **프로젝트 디렉토리** (Makefile, scripts/, .env.example)
+2. **오프라인 패키지 파일** (*.tar.gz)
+3. **RHEL/Rocky Linux ISO 파일**
 
-5. **PostgreSQL 설치**
-   ```bash
-   # PGDG 저장소에서 PostgreSQL 다운로드
-   make offline-download
+### 오프라인 서버: 설치
 
-   # 또는 직접 설치 (인터넷 필요)
-   make install init enable-start setup-external
-   ```
+#### 1. 사전 준비
 
-6. **ISO 마운트 영구화 (선택사항)**
+```bash
+# 프로젝트 디렉토리로 이동
+cd /root/postgresql-install-script
 
-   `/etc/fstab`에 추가:
-   ```bash
-   echo "/root/rhel-9.6-x86_64-dvd.iso /mnt/rhel-iso iso9660 loop 0 0" | sudo tee -a /etc/fstab
-   ```
+# 패키지 압축 해제
+tar -xzf postgresql16-offline-el9.tar.gz -C /root/
+tar -xzf tomcat-offline-el9.tar.gz -C /root/
+
+# .env 파일 생성 및 ISO 경로 설정
+make init-env
+vi .env
+# ISO_FILE=/path/to/rhel-9.6-x86_64-dvd.iso
+```
+
+#### 2. PostgreSQL 오프라인 설치
+
+```bash
+# 전체 설치 (ISO 마운트 + repo 설정 + 설치 + 설정)
+make offline-full-install
+
+# 테스트
+make test
+```
+
+#### 3. Tomcat 오프라인 설치
+
+```bash
+# 전체 설치 (ISO 마운트 + repo 설정 + 설치 + 설정)
+make tomcat-offline-full-install
+
+# 테스트
+make tomcat-test
+```
+
+#### 4. 단계별 설치 (선택사항)
+
+```bash
+# PostgreSQL 단계별
+make iso-mount
+make iso-setup-repo
+make offline-setup-repo
+make offline-install-pkg
+make init
+make enable-start
+make setup-external
+
+# Tomcat 단계별
+make tomcat-offline-setup-repo
+make tomcat-offline-install-pkg
+make tomcat-configure
+make tomcat-firewall
+make tomcat-enable
+make tomcat-start
+```
+
+### 오프라인 워크플로우 안내 보기
+
+```bash
+make offline-workflow
+```
 
 ## 테스트 가이드
 
