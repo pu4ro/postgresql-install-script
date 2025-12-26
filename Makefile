@@ -67,7 +67,7 @@ help: ## 사용 가능한 명령어 목록 표시
 	@echo "$(BLUE)PostgreSQL $(PG_VERSION) 설치 및 관리 도구$(NC)"
 	@echo ""
 	@echo "$(GREEN)사용 가능한 명령어:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.* ## ' Makefile | sed 's/:.*## /\t/' | awk -F'\t' '{printf "  $(YELLOW)%-28s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(BLUE)현재 설정:$(NC)"
 	@echo "  PostgreSQL 버전: $(PG_VERSION)"
