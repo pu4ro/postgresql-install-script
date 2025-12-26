@@ -4,7 +4,15 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="${SCRIPT_DIR}/../rpms"
+# 스크립트가 복사된 위치에 따라 rpms 경로 결정
+if [ -d "${SCRIPT_DIR}/rpms" ]; then
+    REPO_DIR="${SCRIPT_DIR}/rpms"
+elif [ -d "${SCRIPT_DIR}/../rpms" ]; then
+    REPO_DIR="${SCRIPT_DIR}/../rpms"
+else
+    echo "오류: rpms 디렉토리를 찾을 수 없습니다."
+    exit 1
+fi
 PG_VERSION="${1:-16}"
 
 echo "====================================="

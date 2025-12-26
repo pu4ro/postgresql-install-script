@@ -1,8 +1,9 @@
 .PHONY: help install init setup-external start stop restart status enable disable \
-        configure-listen configure-auth firewall uninstall clean check-env \
+        configure-listen configure-auth firewall uninstall clean check-env init-env \
         tune-kernel tune-limits tune-hugepages tune-all show-tuning \
         test test-connection test-database test-performance \
         offline-download offline-createrepo offline-package offline-install offline-setup-repo \
+        offline-install-pkg offline-full-install offline-package-all offline-workflow \
         iso-mount iso-setup-repo iso-unmount iso-all \
         apache-install apache-configure apache-firewall apache-start apache-stop apache-restart \
         apache-status apache-enable apache-disable apache-test apache-all apache-uninstall \
@@ -74,19 +75,43 @@ help: ## 사용 가능한 명령어 목록 표시
 
 check-env: ## 환경 변수 확인
 	@if [ ! -f .env ]; then \
-		echo "$(YELLOW)경고: .env 파일이 없습니다. .env.example을 복사하여 생성하세요.$(NC)"; \
-		echo "$(YELLOW)  cp .env.example .env$(NC)"; \
+		echo "$(RED)오류: .env 파일이 없습니다.$(NC)"; \
+		echo "$(YELLOW)다음 명령어로 생성하세요: make init-env$(NC)"; \
+		exit 1; \
 	else \
 		echo "$(GREEN)✓ .env 파일이 존재합니다.$(NC)"; \
 	fi
 	@echo ""
-	@echo "$(BLUE)현재 환경 변수:$(NC)"
+	@echo "$(BLUE)PostgreSQL 설정:$(NC)"
 	@echo "  PG_VERSION=$(PG_VERSION)"
 	@echo "  PG_DATA_DIR=$(PG_DATA_DIR)"
 	@echo "  PG_PORT=$(PG_PORT)"
 	@echo "  PG_LISTEN_ADDRESSES=$(PG_LISTEN_ADDRESSES)"
 	@echo "  PG_ALLOWED_CIDR=$(PG_ALLOWED_CIDR)"
 	@echo "  PG_AUTH_METHOD=$(PG_AUTH_METHOD)"
+	@echo ""
+	@echo "$(BLUE)오프라인 패키징 설정:$(NC)"
+	@echo "  OFFLINE_REPO_DIR=$(OFFLINE_REPO_DIR)"
+	@echo "  OFFLINE_ARCHIVE_NAME=$(OFFLINE_ARCHIVE_NAME)"
+	@echo "  ISO_FILE=$(ISO_FILE)"
+
+init-env: ## .env 파일 초기화 (.env.example 복사)
+	@if [ -f .env ]; then \
+		echo "$(YELLOW).env 파일이 이미 존재합니다.$(NC)"; \
+		read -p "덮어쓰시겠습니까? (y/N): " confirm; \
+		if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+			cp .env.example .env; \
+			echo "$(GREEN)✓ .env 파일이 생성되었습니다.$(NC)"; \
+		else \
+			echo "$(YELLOW)취소되었습니다.$(NC)"; \
+		fi; \
+	else \
+		cp .env.example .env; \
+		echo "$(GREEN)✓ .env 파일이 생성되었습니다.$(NC)"; \
+	fi
+	@echo ""
+	@echo "$(YELLOW).env 파일을 편집하여 환경에 맞게 설정하세요:$(NC)"
+	@echo "  $(YELLOW)vi .env$(NC)"
 
 # ===================================================================
 # 시스템 커널 튜닝
@@ -488,6 +513,165 @@ offline-package: offline-download offline-createrepo ## 오프라인 패키지 �
 	@echo "$(YELLOW)이 파일을 오프라인 서버로 복사하여 사용하세요.$(NC)"
 
 # ===================================================================
+# 온라인 패키징 전체 플로우 (ISO 기반 종속성 + PostgreSQL 패키지)
+# ===================================================================
+
+offline-package-all: check-env ## [온라인] ISO 로컬 repo 설정 후 전체 오프라인 패키지 생성
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(BLUE)오프라인 패키지 생성 시작 (ISO 기반)$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+
+	@if [ -z "$(ISO_FILE)" ]; then \
+		echo "$(RED)오류: .env 파일에 ISO_FILE이 설정되지 않았습니다.$(NC)"; \
+		echo "$(YELLOW).env 파일을 편집하여 ISO_FILE 경로를 설정하세요.$(NC)"; \
+		exit 1; \
+	fi
+
+	@echo "$(YELLOW)1단계: ISO 마운트 및 로컬 Repository 설정$(NC)"
+	$(MAKE) iso-mount
+	$(MAKE) iso-setup-repo
+
+	@echo ""
+	@echo "$(YELLOW)2단계: PGDG 온라인 저장소 추가$(NC)"
+	@if ! dnf repolist | grep -q pgdg$(PG_VERSION); then \
+		sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(EL_VERSION)-x86_64/pgdg-redhat-repo-latest.noarch.rpm; \
+		sudo dnf -qy module disable postgresql; \
+	else \
+		echo "$(GREEN)✓ PGDG 저장소 이미 설정됨$(NC)"; \
+	fi
+
+	@echo ""
+	@echo "$(YELLOW)3단계: PostgreSQL 패키지 다운로드$(NC)"
+	$(MAKE) offline-download
+
+	@echo ""
+	@echo "$(YELLOW)4단계: Repository 메타데이터 생성$(NC)"
+	$(MAKE) offline-createrepo
+
+	@echo ""
+	@echo "$(YELLOW)5단계: 오프라인 패키지 압축$(NC)"
+	@echo "$(YELLOW)5-1. 설치 스크립트 복사$(NC)"
+	@cp -f scripts/offline-setup-repo.sh $(OFFLINE_REPO_DIR)/
+	@chmod +x $(OFFLINE_REPO_DIR)/offline-setup-repo.sh
+
+	@echo "$(YELLOW)5-2. README 파일 생성$(NC)"
+	@echo "PostgreSQL $(PG_VERSION) 오프라인 설치 패키지" > $(OFFLINE_REPO_DIR)/README.txt
+	@echo "========================================" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "## 오프라인 서버 설치 방법" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "1. 패키지 파일과 ISO 파일을 오프라인 서버로 복사" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "2. 압축 해제:" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   tar -xzf $(OFFLINE_ARCHIVE_NAME)" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "3. .env 파일에서 ISO_FILE 경로 설정:" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   vi .env" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   # ISO_FILE=/path/to/rhel-9.6-x86_64-dvd.iso" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "4. 전체 설치 (권장):" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   make offline-full-install" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "5. 또는 단계별 설치:" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   make iso-mount" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   make iso-setup-repo" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   make offline-install" >> $(OFFLINE_REPO_DIR)/README.txt
+	@echo "   make init enable-start setup-external" >> $(OFFLINE_REPO_DIR)/README.txt
+
+	@echo "$(YELLOW)5-3. 압축 파일 생성$(NC)"
+	@cd $(dir $(OFFLINE_REPO_DIR)) && tar -czf $(OFFLINE_ARCHIVE_NAME) $(notdir $(OFFLINE_REPO_DIR))
+
+	@echo ""
+	@echo "$(YELLOW)6단계: ISO 마운트 해제$(NC)"
+	$(MAKE) iso-unmount
+
+	@echo ""
+	@echo "$(GREEN)========================================$(NC)"
+	@echo "$(GREEN)오프라인 패키지 생성 완료!$(NC)"
+	@echo "$(GREEN)========================================$(NC)"
+	@echo ""
+	@echo "$(BLUE)생성된 파일:$(NC)"
+	@ls -lh $(dir $(OFFLINE_REPO_DIR))$(OFFLINE_ARCHIVE_NAME) 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)오프라인 서버에서 설치 방법:$(NC)"
+	@echo "  1. 패키지, ISO 파일, 프로젝트 디렉토리를 오프라인 서버로 복사"
+	@echo "  2. 압축 해제: tar -xzf $(OFFLINE_ARCHIVE_NAME) -C /root/"
+	@echo "  3. .env 파일에서 ISO_FILE 경로 설정"
+	@echo "  4. 설치 실행: make offline-full-install"
+
+offline-workflow: ## 오프라인 설치 전체 워크플로우 안내
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(BLUE)PostgreSQL $(PG_VERSION) 오프라인 설치 워크플로우$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(GREEN)[ 사전 준비 ]$(NC)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "  $(YELLOW)1. 환경 설정 파일 생성$(NC)"
+	@echo "     make init-env"
+	@echo ""
+	@echo "  $(YELLOW)2. .env 파일 편집 (ISO_FILE 경로 설정)$(NC)"
+	@echo "     vi .env"
+	@echo "     # ISO_FILE=/path/to/rhel-9.6-x86_64-dvd.iso"
+	@echo ""
+	@echo ""
+	@echo "$(GREEN)[ 온라인 서버 작업 ]$(NC)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "  $(YELLOW)1. 오프라인 패키지 생성$(NC)"
+	@echo "     make offline-package-all"
+	@echo ""
+	@echo "  $(YELLOW)2. 생성된 파일 확인$(NC)"
+	@echo "     - $(OFFLINE_ARCHIVE_NAME)"
+	@echo "     - RHEL 9.6 ISO 파일"
+	@echo ""
+	@echo "  $(YELLOW)3. 파일 전송$(NC)"
+	@echo "     위 2개 파일을 오프라인 서버로 복사 (USB, SCP 등)"
+	@echo ""
+	@echo ""
+	@echo "$(GREEN)[ 오프라인 서버 작업 ]$(NC)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "  $(YELLOW)1. 프로젝트 디렉토리 복사$(NC)"
+	@echo "     Makefile, scripts/, .env 파일을 오프라인 서버로 복사"
+	@echo ""
+	@echo "  $(YELLOW)2. 패키지 압축 해제$(NC)"
+	@echo "     tar -xzf $(OFFLINE_ARCHIVE_NAME) -C /root/"
+	@echo ""
+	@echo "  $(YELLOW)3. .env 파일에서 ISO_FILE 경로 설정$(NC)"
+	@echo "     vi .env"
+	@echo "     # ISO_FILE=/path/to/rhel-9.6-x86_64-dvd.iso"
+	@echo ""
+	@echo "  $(YELLOW)4. 전체 설치 (권장 - 한번에 실행)$(NC)"
+	@echo "     make offline-full-install"
+	@echo ""
+	@echo "  $(YELLOW)또는 단계별 설치:$(NC)"
+	@echo "     a. make iso-mount"
+	@echo "     b. make iso-setup-repo"
+	@echo "     c. make offline-install"
+	@echo "     d. make init"
+	@echo "     e. make enable-start"
+	@echo "     f. make setup-external"
+	@echo ""
+	@echo "  $(YELLOW)5. 설치 확인$(NC)"
+	@echo "     make test"
+	@echo ""
+	@echo ""
+	@echo "$(GREEN)[ 추가 옵션 ]$(NC)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "  $(YELLOW)Apache 오프라인 패키징$(NC)"
+	@echo "     make apache-offline-package"
+	@echo ""
+	@echo "  $(YELLOW)Tomcat 오프라인 패키징$(NC)"
+	@echo "     make tomcat-offline-package"
+	@echo ""
+	@echo "  $(YELLOW)전체 웹 스택 오프라인 패키징$(NC)"
+	@echo "     make web-offline-package"
+	@echo ""
+
+# ===================================================================
 # 오프라인 설치 (인터넷이 없는 서버에서 실행)
 # ===================================================================
 
@@ -519,8 +703,75 @@ offline-setup-repo: ## 오프라인 Repository 설정 (압축 해제 후 사용)
 	@echo "$(BLUE)다음 명령어로 설치를 진행하세요:$(NC)"
 	@echo "  $(YELLOW)make install init enable-start$(NC)"
 
-offline-install: offline-setup-repo install ## 오프라인 패키지를 사용하여 PostgreSQL 설치
+# 오프라인 전용 설치 (온라인 저장소 사용 안함)
+offline-install-pkg: ## 오프라인 패키지로 PostgreSQL 설치 (저장소 접근 없음)
+	@echo "$(BLUE)PostgreSQL $(PG_VERSION) 오프라인 설치...$(NC)"
+
+	@echo "$(YELLOW)1. 기본 PostgreSQL 모듈 비활성화$(NC)"
+	sudo dnf -qy module disable postgresql 2>/dev/null || true
+
+	@echo "$(YELLOW)2. PostgreSQL $(PG_VERSION) 서버 설치$(NC)"
+	sudo dnf install -y --disablerepo='*' --enablerepo='postgresql-local' \
+		postgresql$(PG_VERSION)-server postgresql$(PG_VERSION)-contrib
+
+	@echo "$(GREEN)✓ PostgreSQL $(PG_VERSION) 오프라인 설치 완료$(NC)"
+
+offline-install: offline-setup-repo offline-install-pkg ## 오프라인 패키지를 사용하여 PostgreSQL 설치
 	@echo "$(GREEN)✓ 오프라인 설치 완료$(NC)"
+	@echo ""
+	@echo "$(BLUE)다음 단계:$(NC)"
+	@echo "  $(YELLOW)make init enable-start setup-external$(NC)"
+
+# ===================================================================
+# ISO + 오프라인 패키지 통합 설치 (오프라인 서버용)
+# ===================================================================
+
+offline-full-install: check-env ## ISO + 오프라인 패키지로 전체 설치
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(BLUE)PostgreSQL 오프라인 전체 설치 시작$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+
+	@if [ -z "$(ISO_FILE)" ]; then \
+		echo "$(RED)오류: .env 파일에 ISO_FILE이 설정되지 않았습니다.$(NC)"; \
+		echo "$(YELLOW).env 파일을 편집하여 ISO_FILE 경로를 설정하세요.$(NC)"; \
+		exit 1; \
+	fi
+
+	@echo "$(YELLOW)1단계: ISO 마운트 및 Repository 설정$(NC)"
+	$(MAKE) iso-mount
+	$(MAKE) iso-setup-repo
+
+	@echo ""
+	@echo "$(YELLOW)2단계: 오프라인 PostgreSQL Repository 설정$(NC)"
+	$(MAKE) offline-setup-repo
+
+	@echo ""
+	@echo "$(YELLOW)3단계: PostgreSQL 설치$(NC)"
+	$(MAKE) offline-install-pkg
+
+	@echo ""
+	@echo "$(YELLOW)4단계: 데이터베이스 초기화$(NC)"
+	$(MAKE) init
+
+	@echo ""
+	@echo "$(YELLOW)5단계: 서비스 활성화 및 시작$(NC)"
+	$(MAKE) enable-start
+
+	@echo ""
+	@echo "$(YELLOW)6단계: 외부 접속 설정$(NC)"
+	$(MAKE) setup-external
+
+	@echo ""
+	@echo "$(GREEN)========================================$(NC)"
+	@echo "$(GREEN)PostgreSQL $(PG_VERSION) 오프라인 설치 완료!$(NC)"
+	@echo "$(GREEN)========================================$(NC)"
+	@echo ""
+	@echo "$(BLUE)설치된 서비스:$(NC)"
+	@echo "  PostgreSQL: localhost:$(PG_PORT)"
+	@echo ""
+	@echo "$(YELLOW)다음 명령어로 테스트하세요:$(NC)"
+	@echo "  $(YELLOW)make test$(NC)"
 
 # ===================================================================
 # ISO 로컬 Repository 설정
